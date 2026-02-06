@@ -1,51 +1,93 @@
 # Cybership Carrier Integration Service
 
-TypeScript service that talks to the UPS Rating API to get shipping rates. Built so we can plug in more carriers (FedEx, USPS, DHL) and more operations (labels, tracking, address validation) without reworking the core.
+TypeScript service for fetching shipping rates from the UPS Rating API.  
+Designed as a production-ready, carrier-agnostic module that can be extended to support additional carriers (FedEx, USPS, DHL) and operations (labels, tracking, address validation) without changing the core.
 
 ---
 
-### 1. Why this architecture?
+## Design Overview
 
-I wanted a **carrier-agnostic** design, not a one-off UPS integration.
+**Goal:** make new carriers and new operations easy to add.
 
-There’s a single `CarrierAdapter` interface in `carriers/base/Carrier.ts`. The rate service only depends on that; no UPS imports, no OAuth. Adding FedEx would mean a new adapter class and one line in the factory; the rest of the code doesn’t change.
+- **Carrier interface**  
+  A single `CarrierAdapter` interface defines what a carrier can do. The shipping service depends only on this interface.
 
-### 2. How would a new carrier be added?
+- **Adapters, not conditionals**  
+  UPS is implemented as one adapter. Adding another carrier means adding another adapter, not modifying existing logic.
 
-Implement `CarrierAdapter` in e.g. `carriers/fedex/` (carrierId, supportedOperations, executeRate). Put FedEx-specific stuff there: whatever auth they use, a rate client that turns our domain request into their API call and their response into `RateQuote[]`, and any DTOs. No changes to domain, http, or service.
+- **Clear separation of concerns**
+  - **Domain:** shared business models and validation (`Address`, `Parcel`, `RateRequest`, `RateQuote`)
+  - **Transport:** a simple `HttpClient` abstraction
+  - **Auth:** fully encapsulated inside each carrier adapter
+  - **Normalization:** carrier-specific formats are mapped into shared domain types
 
-In the factory (`createShippingService()` in index.ts), instantiate the new adapter with config and the shared `HttpClient`, and add it to the adapters map under `'fedex'`. Add FedEx env vars to config. Done. The service already does `adapters.get(carrierId)` and `adapter.executeRate(parsed.data)`.
-
-### 3. How is auth handled and cached?
-
-Auth is entirely inside the UPS adapter. The rate service doesn’t know OAuth exists.
-
-`UpsAuthClient` gets a token from the UPS OAuth endpoint (client credentials, Basic auth). We cache one token in memory with an expiry. Before each Rating call we ask for a token; if the cached one is still good (we refresh a bit before expiry, e.g. 60s buffer), we reuse it. If Rating returns 401, the rating client calls `auth.refreshToken()` and retries the rate request once. Callers never see 401 or token details. Domain types and the service have no reference to tokens or OAuth.
-
-### 4. How I handled errors ?
-
-We don’t throw raw carrier messages or random strings. Everything goes through **CarrierError** (see `errors.ts`): a `details` object with `code` (e.g. AUTH_FAILED, RATE_LIMITED, VALIDATION_ERROR), `message`, optional `statusCode` and `carrierCode`, and `retryable`.
-
-Adapters turn HTTP failures into the right CarrierError (e.g. `CarrierError.rateLimited(...)`). The service doesn’t catch them; they bubble. Callers can check `err instanceof CarrierError` and use `err.details.code` and `err.details.retryable`. Validation runs before any HTTP (Zod); when it fails we throw `CarrierError.validation(...)`, so we never hit the API with bad input and the error shape stays consistent.
-
-### 5. What would you build next with more time?
-
-More carriers (FedEx, USPS, DHL) using the same adapter pattern. More operations on the interface (executeTrack, purchaseLabel, validateAddress) and implement them for UPS first. Move the token cache to something shared (e.g. Redis) for multi-instance. Retries with backoff for timeouts and 429/5xx. Structured logging and maybe metrics. A small CLI to run a rate request for demos.
+Callers only see normalized `RateQuote[]`. Carrier-specific details never leak out.
 
 ---
 
-## Features (summary)
+## Authentication
 
-- **Rate shopping:** origin, destination, package, optional service level → normalized `RateQuote[]`. UPS’s format stays internal.
-- **UPS OAuth 2.0:** client credentials, token cache, refresh before expiry or on 401.
-- **Extensible:** one Carrier interface, one adapter per carrier; new carriers/ops don’t require rewriting existing code.
-- **Config:** everything from env (see `.env.example`), no hardcoded secrets.
-- **Types & validation:** shared domain types, Zod before API calls, typed CarrierError.
-- **Integration tests:** HTTP stubbed at the boundary; we assert request shape, normalized output, token reuse/refresh, and error mapping.
+UPS OAuth 2.0 is handled entirely inside the UPS adapter.
 
-## How to run
+- Client-credentials flow
+- In-memory token cache with expiry awareness
+- Token reused when valid
+- Automatic refresh on expiry or 401, with a single retry
 
-Node ≥ 18.
+The rest of the system does not know tokens or OAuth exist.
+
+---
+
+## Error Handling
+
+All errors are normalized into a single `CarrierError` type.
+
+Each error includes:
+
+- A stable error code (for example `AUTH_FAILED`, `RATE_LIMITED`, `VALIDATION_ERROR`)
+- A human-readable message
+- Optional carrier metadata
+- A `retryable` flag
+
+Input validation runs before any external call using Zod. Invalid input never reaches a carrier API.
+
+---
+
+## Extending the System
+
+### Add a New Carrier
+
+1. Implement `CarrierAdapter` in a new folder
+2. Handle auth, request mapping, and response normalization inside the adapter
+3. Register it in the factory
+4. Add environment config
+
+No changes required elsewhere.
+
+### Add a New Operation
+
+- Extend the carrier interface
+- Implement it for UPS first
+- Other carriers can opt in later
+
+---
+
+## Testing
+
+Integration tests stub HTTP at the boundary and verify:
+
+- Domain input builds the correct UPS request payload
+- UPS responses normalize into `RateQuote[]`
+- OAuth token acquisition, reuse, and refresh
+- Error conditions map to the correct `CarrierError` codes
+
+No live API calls or credentials are required.
+
+---
+
+## How to Run
+
+Node 18 or newer.
 
 ```bash
 npm install

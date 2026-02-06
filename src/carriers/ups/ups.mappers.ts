@@ -50,7 +50,9 @@ export function toUpsPackage(pkg: Parcel): UpsRatePackage {
   };
 }
 
-export function buildRateRequestBody(req: ValidatedRateRequest): UpsRateRequestWrapper {
+export function buildRateRequestBody(
+  req: ValidatedRateRequest
+): UpsRateRequestWrapper {
   const requestOption = req.serviceLevel ? "Rate" : "Shop";
   const serviceCode = req.serviceLevel
     ? SERVICE_LEVEL_TO_UPS_CODE[req.serviceLevel] ?? req.serviceLevel
@@ -95,7 +97,8 @@ export function buildRateRequestBody(req: ValidatedRateRequest): UpsRateRequestW
 export function parseRatedShipment(rated: UpsRatedShipment): RateQuote | null {
   const serviceCode = rated.Service?.Code ?? "";
   const serviceName = rated.Service?.Description ?? (serviceCode || "Unknown");
-  const totalCharge = rated.NegotiatedRateCharges?.TotalCharge ?? rated.TotalCharge;
+  const totalCharge =
+    rated.NegotiatedRateCharges?.TotalCharge ?? rated.TotalCharge;
   const monetaryValue = totalCharge?.MonetaryValue;
   const currency = totalCharge?.CurrencyCode ?? "USD";
 
@@ -123,7 +126,9 @@ export function parseRateResponse(
   body: unknown,
   parseRated: (rated: UpsRatedShipment) => RateQuote | null
 ): RateQuote[] {
-  const wrapper = body as { RateResponse?: { RatedShipment?: UpsRatedShipment[] } };
+  const wrapper = body as {
+    RateResponse?: { RatedShipment?: UpsRatedShipment[] };
+  };
   const ratedShipments = wrapper?.RateResponse?.RatedShipment;
   if (!Array.isArray(ratedShipments)) return [];
   const quotes: RateQuote[] = [];
